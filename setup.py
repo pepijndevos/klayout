@@ -141,6 +141,25 @@ def quote_path(path):
 
 import subprocess
 
+def is_emscripten():
+    """
+    Returns true if the build target is Emscripten (WebAssembly)
+    """
+    #  platform.system () reports the host, not the target, so this uses the target
+    #  triplet provided by the Emscripten and Pyodide build environments and falls back
+    #  to the compiler name. Pyodide wraps the compilers as cc/c++, Emscripten provides
+    #  emcc/em++
+    if "emscripten" in os.environ.get("PLATFORM_TRIPLET", "").lower():
+        return True
+
+    for var in ["CC", "CXX", "LDSHARED"]:
+        compiler = os.path.basename(os.environ.get(var, "")).lower()
+        if "emscripten" in compiler or compiler.startswith("emcc") or compiler.startswith("em++"):
+            return True
+
+    return False
+
+
 def check_libpng():
     """ Check if libpng is available (Linux & Macos only)"""
     try:
@@ -454,7 +473,12 @@ class Config(object):
         """
         Gets the source files for the given module and root source path
         """
-        return glob.glob(os.path.join(self.src_path(mod), "*.cc"))
+        sources = glob.glob(os.path.join(self.src_path(mod), "*.cc"))
+        if is_emscripten():
+            #  tlWebDAV requires curl or Qt (see tlWebDAV.h), neither of which exists
+            #  for WebAssembly
+            sources = [s for s in sources if os.path.basename(s) != "tlWebDAV.cc"]
+        return sources
           
     def compile_args(self, options):
         """
@@ -485,6 +509,11 @@ class Config(object):
             else:
                 args += options.get("cxxflags-linux", [])
 
+        if is_emscripten():
+            #  Emscripten has no libpng-config. libpng and zlib are provided as ports,
+            #  including the headers the deflate and stream code includes
+            args += ["-sUSE_LIBPNG=1"]
+
         result = []
         for a in args:
             if a == "$libpng_cflags":
@@ -508,7 +537,13 @@ class Config(object):
             if platform.system() == "Darwin":
                 libs += options.get("libraries-darwin", [])
             else:
-                libs += options.get("libraries-linux", [])
+                for lib in options.get("libraries-linux", []):
+                    #  There is no curl for WebAssembly, and libpng comes from the
+                    #  Emscripten port (see compile_args ()), which brings its own
+                    #  library flags - naming it here breaks the link
+                    if is_emscripten() and lib in ["curl", "png"]:
+                        continue
+                    libs.append(lib)
         return libs
 
     def link_args(self, options, is_library):
@@ -574,7 +609,6 @@ class Config(object):
         Returns the macros to use for building
         """
         macros = [
-            ("HAVE_CURL", 1),
             ("HAVE_EXPAT", 1),
             ("HAVE_PNG", 1),
             ("KLAYOUT_VERSION", self.version()),
@@ -582,6 +616,10 @@ class Config(object):
             ("KLAYOUT_MINOR_VERSION", self.minor_version()),
             ("GSI_ALIAS_INSPECT", 1),
         ]
+
+        if not is_emscripten():
+            #  There is no curl for WebAssembly (see libraries ())
+            macros += [("HAVE_CURL", 1)]
 
         return macros
 

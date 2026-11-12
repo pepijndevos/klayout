@@ -149,8 +149,48 @@ jobs:
         name: artifact-sdist
         path: dist/*.tar.gz
 
+  build_pyodide:
+    name: Build Pyodide wheel
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # must match the Emscripten version of the Pyodide target, see pyproject.toml
+      EMSCRIPTEN_VERSION: "5.0.3"
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Setup Emscripten
+      uses: mymindstorm/setup-emsdk@v14
+      with:
+        version: ${{ env.EMSCRIPTEN_VERSION }}
+
+    - name: Cache wasm dependencies
+      id: wasm-deps-cache
+      uses: actions/cache@v5
+      with:
+        path: ${{ runner.temp }}/wasm-deps
+        key: wasm-deps-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('ci-scripts/wasm-deps.sh') }}
+
+    - name: Build wasm dependencies
+      if: steps.wasm-deps-cache.outputs.cache-hit != 'true'
+      run: ci-scripts/wasm-deps.sh "$RUNNER_TEMP/wasm-deps" "$RUNNER_TEMP/wasm-deps-work"
+
+    #  cibuildwheel 4 tags the wheel with the PEP 783 platform tag
+    #  (pyemscripten_2026_0_wasm32), which is what PyPI accepts
+    - name: Build wheels
+      uses: pypa/cibuildwheel@v4.2.1
+      env:
+        CIBW_PLATFORM: pyodide
+        WASM_DEPS_DIR: ${{ runner.temp }}/wasm-deps
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: artifact-pyodide
+        path: ./wheelhouse/*.whl
+
   upload_to_test_pypy:
-    needs: [build, make_sdist]
+    needs: [build, make_sdist, build_pyodide]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/download-artifact@v8
@@ -166,7 +206,7 @@ jobs:
         repository-url: https://test.pypi.org/legacy/
 
   upload_to_pypi:
-    needs: [build, make_sdist]
+    needs: [build, make_sdist, build_pyodide]
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'published'
     steps:
