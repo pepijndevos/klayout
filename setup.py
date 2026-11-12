@@ -509,11 +509,6 @@ class Config(object):
             else:
                 args += options.get("cxxflags-linux", [])
 
-        if is_emscripten():
-            #  Emscripten has no libpng-config. libpng and zlib are provided as ports,
-            #  including the headers the deflate and stream code includes
-            args += ["-sUSE_LIBPNG=1"]
-
         result = []
         for a in args:
             if a == "$libpng_cflags":
@@ -538,11 +533,15 @@ class Config(object):
                 libs += options.get("libraries-darwin", [])
             else:
                 for lib in options.get("libraries-linux", []):
-                    #  There is no curl for WebAssembly, and libpng comes from the
-                    #  Emscripten port (see compile_args ()), which brings its own
-                    #  library flags - naming it here breaks the link
-                    if is_emscripten() and lib in ["curl", "png"]:
+                    #  There is no curl for WebAssembly. libpng (like expat) is a
+                    #  static PIC library from ci-scripts/wasm-deps.sh; zlib is not
+                    #  linked: Pyodide's main module exports it
+                    if is_emscripten() and lib == "curl":
                         continue
+                    #  emcc maps "-lpng" to its libpng port library (which a side
+                    #  module cannot use), so name the versioned archive instead
+                    if is_emscripten() and lib == "png":
+                        lib = "png16"
                     libs.append(lib)
         return libs
 
